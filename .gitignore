@@ -44,6 +44,32 @@ Thumbs.db
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+*.pyc
+
+# Project-specific
+frames/
+*.wav
+*.mp4
+*.mov
+*.avi
+library.json
+frames/
+
 # Replit
 .cache/
 .local/
