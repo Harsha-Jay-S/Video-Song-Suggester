@@ -195,3 +195,5 @@ uv run python run_me.py --video input.mp4 --dry-run
 - **Parallel processing**: `--parallel` in `analyze_music.py`
 - **Typed dataclasses**: Structured data objects throughout the pipeline
 - **Progress bars**: Visual feedback for long-running operations
+
+This Project is Entirely done by Opencode AI. I am not responsible for anything faulty. PR's are encouraged 
