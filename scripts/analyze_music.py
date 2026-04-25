@@ -4,12 +4,17 @@ its Genre / Tempo / Mood profile.
 
 Usage:
     python scripts/analyze_music.py <folder> [--index-file library.json]
+    python scripts/analyze_music.py <folder> --no-gpu  # force CPU
+    python scripts/analyze_music.py <folder> --dry-run   # preview without writing
+    python scripts/analyze_music.py <folder> --parallel 4  # parallel processing
 """
 
 import argparse
 import json
 import math
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,14 +24,37 @@ except ImportError:
     print("Error: librosa not installed. Run: uv add librosa", file=sys.stderr)
     sys.exit(1)
 
+from _device import add_gpu_args, resolve_device, DeviceConfig
+
 SLOW_MAX = 90
 FAST_MIN = 140
+
+
+@dataclass
+class TrackProfile:
+    file: str
+    path: str
+    Genre: str
+    Tempo: str
+    Mood: str
+    bpm: Optional[int] = None
+    energy: Optional[float] = None
+    key_mode: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "file": self.file,
+            "path": self.path,
+            "Genre": self.Genre,
+            "Tempo": self.Tempo,
+            "Mood": self.Mood,
+        }
 
 
 def estimate_tempo(y: List[float], sr: int) -> int:
     try:
         onset_env = librosa.onset.onset_envelope(y, sr=sr)
-        tempo, _ = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+        tempo, _ = librosa.beat.beat_track(onset_envelope= onset_env, sr=sr)
         bpm = int(round(float(tempo)))
         return max(40, min(220, bpm))
     except Exception:
@@ -85,21 +113,25 @@ def analyze_track(path: Path) -> Dict[str, Any]:
         key_mode = estimate_tonality(y, sr)
         tempo_cat = tempo_label(bpm)
         mood = infer_mood(energy, bpm, key_mode)
-        return {
-            "file": path.name,
-            "path": str(path),
-            "Genre": path.stem.replace("_", " ").replace("-", " ").title(),
-            "Tempo": tempo_cat,
-            "Mood": mood,
-        }
+        return TrackProfile(
+            file=path.name,
+            path=str(path),
+            Genre=path.stem.replace("_", " ").replace("-", " ").title(),
+            Tempo=tempo_cat,
+            Mood=mood,
+            bpm=bpm,
+            energy=energy,
+            key_mode=key_mode,
+        ).to_dict()
     except Exception as exc:
-        return {
-            "file": path.name,
-            "path": str(path),
-            "Genre": path.stem.replace("_", " ").replace("-", " ").title(),
-            "Tempo": "Medium",
-            "Mood": "Balanced",
-        }
+        print(f"Warning: failed to analyze {path.name}: {exc}", file=sys.stderr)
+        return TrackProfile(
+            file=path.name,
+            path=str(path),
+            Genre=path.stem.replace("_", " ").replace("-", " ").title(),
+            Tempo="Medium",
+            Mood="Balanced",
+        ).to_dict()
 
 
 def main() -> int:
@@ -117,12 +149,27 @@ def main() -> int:
         action="store_true",
         help="Recurse into subdirectories.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview results without writing the index file.",
+    )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1, sequential).",
+    )
+    add_gpu_args(parser)
     args = parser.parse_args()
 
     folder = Path(args.folder)
     if not folder.is_dir():
         print(f"Error: not a directory: {folder}", file=sys.stderr)
         return 1
+
+    device_cfg = resolve_device(args.use_gpu)
+    print(f"Using device: {device_cfg.device}", file=sys.stderr)
 
     exts = {".mp3", ".wav", ".flac", ".m4a", ".ogg"}
     pattern = "**/*" if args.recursive else "*"
@@ -135,11 +182,27 @@ def main() -> int:
         return 1
 
     tracks: List[Dict[str, Any]] = []
-    for idx, path in enumerate(paths, 1):
-        print(f"[{idx}/{len(paths)}] {path.name}...", file=sys.stderr, flush=True)
-        tracks.append(analyze_track(path))
 
-    index = {"version": 1, "tracks": tracks, "count": len(tracks)}
+    if args.parallel > 1:
+        with ProcessPoolExecutor(max_workers=args.parallel) as executor:
+            futures = {executor.submit(analyze_track, p): p for p in paths}
+            for idx, future in enumerate(as_completed(futures), 1):
+                print(f"[{idx}/{len(paths)}] Analyzing...", file=sys.stderr, flush=True)
+                tracks.append(future.result())
+    else:
+        for idx, path in enumerate(paths, 1):
+            print(f"[{idx}/{len(paths)}] {path.name}...", file=sys.stderr, flush=True)
+            tracks.append(analyze_track(path))
+
+    index = {"version": 2, "tracks": tracks, "count": len(tracks)}
+    print(f"\nIndex built with {len(tracks)} tracks.", file=sys.stderr)
+
+    if args.dry_run:
+        print("\n=== Dry run — preview ===", file=sys.stderr)
+        print(json.dumps(index, indent=2))
+        print("\n[Dry run] Skipping file write.")
+        return 0
+
     out = Path(args.index_file)
     with open(out, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
