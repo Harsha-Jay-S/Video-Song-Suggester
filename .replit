@@ -29,4 +29,4 @@ externalPort = 80
 
 [nix]
 channel = "stable-25_05"
-packages = ["libGL", "libGLU"]
+packages = ["freetype", "lcms2", "libGL", "libGLU", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "tcl", "tk", "zlib"]
